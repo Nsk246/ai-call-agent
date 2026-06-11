@@ -1,0 +1,116 @@
+:root {
+  --bg: #0f1115;
+  --panel: #181b22;
+  --line: #272b34;
+  --text: #e7e9ee;
+  --muted: #8b909c;
+  --accent: #5b8cff;
+  --agent: #1f2a44;
+  --callee: #20262f;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.wrap {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 32px 20px 60px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+h1 { font-size: 22px; font-weight: 650; margin: 0; }
+
+.pill {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--muted);
+}
+.pill-live { background: #16341f; color: #54d98c; }
+.pill-ringing { background: #33300f; color: #e7c84b; }
+.pill-ended { background: #2a1414; color: #e08484; }
+.pill-error { background: #2a1414; color: #e08484; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+input, select, textarea {
+  background: #11141a;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 11px 12px;
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+  resize: vertical;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+button {
+  margin-top: 4px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 9px;
+  padding: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.error { color: #e08484; font-size: 13px; margin: 4px 0 0; }
+
+.transcript {
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.muted { color: var(--muted); font-size: 14px; text-align: center; padding: 24px 0; }
+
+.bubble {
+  border-radius: 12px;
+  padding: 10px 14px;
+  max-width: 85%;
+}
+.bubble .who { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.bubble p { margin: 4px 0 0; line-height: 1.4; }
+.bubble.agent { background: var(--agent); align-self: flex-start; }
+.bubble.callee { background: var(--callee); align-self: flex-end; }
