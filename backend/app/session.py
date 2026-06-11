@@ -1,12 +1,8 @@
-"""Per-call session state and a process-wide registry.
-
-A CallSession ties together the call's task/language config, the live
-transcript, and any frontend "monitor" websockets watching it. State is
-in-memory (single-process). For multi-worker deployments back this with Redis.
-"""
+"""Per-call session state and a process-wide registry."""
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from dataclasses import dataclass, field
 
@@ -16,17 +12,24 @@ from fastapi import WebSocket
 @dataclass
 class CallSession:
     task: str
-    language: str  # "en" | "ml"
+    language: str
     to_number: str
     caller_name: str
+    voice: str = "Aoede"
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    status: str = "created"  # created | ringing | live | ended
+    call_sid: str | None = None
+    status: str = "created"  # created|ringing|live|ended|dropped|no_answer|busy|failed
+    started_at: float | None = None
     transcript: list[dict] = field(default_factory=list)
+    summary: dict | None = None
     monitors: set[WebSocket] = field(default_factory=set)
 
+    @property
+    def duration_sec(self) -> int:
+        return int(time.time() - self.started_at) if self.started_at else 0
+
     async def emit(self, event: dict) -> None:
-        """Record an event and fan it out to all monitor websockets."""
-        if event.get("type") in {"transcript", "status"}:
+        if event.get("type") == "transcript":
             self.transcript.append(event)
         dead = []
         for ws in self.monitors:
@@ -52,9 +55,17 @@ class SessionManager:
     def get(self, session_id: str) -> CallSession | None:
         return self._sessions.get(session_id)
 
+    def get_by_call_sid(self, call_sid: str) -> CallSession | None:
+        for s in self._sessions.values():
+            if s.call_sid == call_sid:
+                return s
+        return None
+
     async def end(self, session_id: str) -> None:
         session = self._sessions.get(session_id)
-        if session:
+        if session and session.status not in (
+            "ended", "dropped", "no_answer", "busy", "failed"
+        ):
             session.status = "ended"
 
 

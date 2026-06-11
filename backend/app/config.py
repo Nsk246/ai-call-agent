@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     callee_transcripts_enabled: bool = True
     transcript_model: str = "gemini-2.5-flash"
 
+    # --- Google Cloud (voice preview TTS) ---
+    google_application_credentials: str = ""
+
     # --- Twilio ---
     twilio_account_sid: str
     twilio_auth_token: str
@@ -33,4 +36,8 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> "Settings":
-    return Settings()
+    s = Settings()
+    if s.google_application_credentials:
+        import os
+        os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", s.google_application_credentials)
+    return s
