@@ -1,5 +1,4 @@
 """Configuration loaded from environment variables (.env)."""
-import os
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,11 +11,11 @@ class Settings(BaseSettings):
     gemini_live_model: str = "gemini-3.1-flash-live-preview"
     gemini_voice: str = "Aoede"
 
-    # --- Google Cloud STT (side-channel: accurate callee transcripts only) ---
-    google_application_credentials: str = ""
-    transcript_stt_enabled: bool = True
-    english_stt_code: str = "en-IN"
-    malayalam_stt_code: str = "ml-IN"
+    # --- Callee transcripts (display only) ---
+    # Each caller utterance is transcribed by a regular Gemini model for the
+    # frontend transcript. Never touches the live call path.
+    callee_transcripts_enabled: bool = True
+    transcript_model: str = "gemini-2.5-flash"
 
     # --- Twilio ---
     twilio_account_sid: str
@@ -34,9 +33,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> "Settings":
-    s = Settings()
-    if s.google_application_credentials:
-        os.environ.setdefault(
-            "GOOGLE_APPLICATION_CREDENTIALS", s.google_application_credentials
-        )
-    return s
+    return Settings()

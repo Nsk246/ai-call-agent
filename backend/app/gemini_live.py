@@ -1,15 +1,13 @@
 """Twilio <-> Gemini Live audio bridge.
 
-Call path (latency-critical): Twilio mu-law 8k -> PCM16 16k -> Gemini;
-Gemini PCM16 24k -> mu-law 8k -> Twilio. Pure speech-to-speech.
+Call path (latency-critical, untouched by anything else):
+  Twilio mu-law 8k -> PCM16 16k -> Gemini Live; Gemini PCM16 24k -> mu-law 8k -> Twilio.
 
-Transcripts for the frontend:
-  - Agent side: Gemini's output_audio_transcription (follows the model's own
-    speech, accurate in any language).
-  - Callee side: a PARALLEL Google Cloud STT stream (ml-IN / en-IN). Gemini's
-    input transcription has no language setting and mis-detects Malayalam as
-    English, so we don't display it. The STT side-channel never touches the
-    conversation path, so it adds zero latency to the call.
+Callee transcripts (display only): caller audio is buffered per utterance;
+when the model starts its reply (= caller finished talking) the snippet is
+sent to a regular Gemini model for exact transcription in the original
+language/script. Accurate Malayalam, ~1s behind speech, zero impact on the
+live call.
 
 SDK NOTE: session.receive() ends at every turn boundary - it must be wrapped
 in an outer loop or the bridge goes deaf after the greeting.
@@ -19,7 +17,9 @@ from __future__ import annotations
 import asyncio
 import audioop
 import base64
+import io
 import json
+import wave
 
 from fastapi import WebSocket
 from google import genai
@@ -27,9 +27,20 @@ from google.genai import types
 
 from .config import get_settings
 from .session import CallSession, manager
-from .stt import StreamingSTT
 
 _LANG_NAME = {"en": "English", "ml": "Malayalam"}
+
+# Don't bother transcribing buffers shorter than this (16kHz * 2B * seconds).
+_MIN_UTT_BYTES = int(16000 * 2 * 0.4)
+# Cap utterance buffer at 60s so a long silence can't grow it unbounded.
+_MAX_UTT_BYTES = 16000 * 2 * 60
+
+_TRANSCRIBE_PROMPT = (
+    "Transcribe EXACTLY what is spoken in this phone-call audio. Use the "
+    "original language and script (Malayalam in Malayalam script, English in "
+    "Latin script; keep code-switching as spoken). Output ONLY the "
+    "transcription text. If there is no clear speech, output nothing."
+)
 
 
 def _system_prompt(task: str, language: str, caller_name: str) -> str:
@@ -71,6 +82,16 @@ _END_CALL_TOOL = {
 }
 
 
+def _pcm16k_to_wav(pcm: bytes) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
 class GeminiBridge:
     def __init__(self, ws: WebSocket, session: CallSession) -> None:
         self.ws = ws
@@ -84,8 +105,10 @@ class GeminiBridge:
         self._down_state = None  # 24k -> 8k (Gemini -> caller)
         # agent transcript accumulation (from Gemini output transcription)
         self._out_buf = ""
-        # side-channel STT for accurate callee transcripts
-        self.stt: StreamingSTT | None = None
+        # caller-utterance audio buffer for display transcription
+        self._utt_buf = bytearray()
+        self._model_turn_open = False
+        self._transcribe_tasks: set[asyncio.Task] = set()
 
     # ---- audio conversion ----
     def _twilio_to_gemini(self, mulaw: bytes) -> bytes:
@@ -110,45 +133,43 @@ class GeminiBridge:
         except Exception:  # noqa: BLE001
             pass
 
-    # ---- transcript helpers ----
-    async def _on_callee_final(self, text: str) -> None:
-        await self.session.emit({"type": "transcript", "role": "callee", "text": text})
-
-    async def _noop(self, text: str) -> None:
-        return
-
+    # ---- transcripts ----
     async def _flush_out(self) -> None:
         text = self._out_buf.strip()
         self._out_buf = ""
         if text:
             await self.session.emit({"type": "transcript", "role": "agent", "text": text})
 
-    def _start_transcript_stt(self) -> None:
-        if not self.settings.transcript_stt_enabled:
+    def _snapshot_utterance(self) -> None:
+        """Caller finished talking (model is replying): transcribe the snippet."""
+        if not self.settings.callee_transcripts_enabled:
+            self._utt_buf.clear()
             return
+        pcm = bytes(self._utt_buf)
+        self._utt_buf.clear()
+        if len(pcm) < _MIN_UTT_BYTES:
+            return
+        task = asyncio.create_task(self._transcribe_and_emit(pcm))
+        self._transcribe_tasks.add(task)
+        task.add_done_callback(self._transcribe_tasks.discard)
+
+    async def _transcribe_and_emit(self, pcm: bytes) -> None:
         try:
-            if self.session.language == "ml":
-                code, alt, model, enhanced = (
-                    self.settings.malayalam_stt_code,
-                    [self.settings.english_stt_code], "default", False,
-                )
-            else:
-                code, alt, model, enhanced = (
-                    self.settings.english_stt_code, [], "telephony", True,
-                )
-            self.stt = StreamingSTT(
-                language_code=code,
-                alternative_language_codes=alt,
-                loop=asyncio.get_running_loop(),
-                on_interim=self._noop,
-                on_final=self._on_callee_final,
-                model=model,
-                use_enhanced=enhanced,
+            resp = await self.client.aio.models.generate_content(
+                model=self.settings.transcript_model,
+                contents=[
+                    types.Part.from_bytes(data=_pcm16k_to_wav(pcm), mime_type="audio/wav"),
+                    _TRANSCRIBE_PROMPT,
+                ],
+                config=types.GenerateContentConfig(temperature=0.0),
             )
-            self.stt.start()
-        except Exception as exc:  # noqa: BLE001 - transcripts are optional
-            print(f"[transcript-stt] disabled ({exc})")
-            self.stt = None
+            text = (resp.text or "").strip()
+            if text:
+                await self.session.emit(
+                    {"type": "transcript", "role": "callee", "text": text}
+                )
+        except Exception as exc:  # noqa: BLE001 - transcripts are best-effort
+            print(f"[callee-transcript] failed (non-fatal): {exc}")
 
     # ---- main ----
     async def run(self) -> None:
@@ -179,7 +200,7 @@ class GeminiBridge:
                     pass
 
     async def _phone_to_gemini(self, gemini) -> None:
-        """Twilio WS receive loop: caller audio -> Gemini (+ STT side-channel)."""
+        """Twilio WS receive loop: caller audio -> Gemini (+ utterance buffer)."""
         async for message in self.ws.iter_text():
             data = json.loads(message)
             event = data.get("event")
@@ -188,21 +209,16 @@ class GeminiBridge:
                 self.stream_sid = data["start"]["streamSid"]
                 self.session.status = "live"
                 await self.session.emit({"type": "status", "status": "live"})
-                self._start_transcript_stt()
-                # We placed the call -> nudge the model to greet first.
                 await gemini.send_realtime_input(
                     text="(The call just connected and someone answered. Greet them now.)"
                 )
 
             elif event == "media":
-                mulaw = base64.b64decode(data["media"]["payload"])
-                if self.stt:
-                    self.stt.feed(mulaw)          # parallel, display-only
+                pcm16 = self._twilio_to_gemini(base64.b64decode(data["media"]["payload"]))
+                if len(self._utt_buf) < _MAX_UTT_BYTES:
+                    self._utt_buf.extend(pcm16)
                 await gemini.send_realtime_input(
-                    audio=types.Blob(
-                        data=self._twilio_to_gemini(mulaw),
-                        mime_type="audio/pcm;rate=16000",
-                    )
+                    audio=types.Blob(data=pcm16, mime_type="audio/pcm;rate=16000")
                 )
 
             elif event == "stop":
@@ -215,16 +231,26 @@ class GeminiBridge:
             async for response in gemini.receive():
                 turn_seen = True
                 sc = response.server_content
+                has_output = bool(response.data) or bool(
+                    sc and sc.output_transcription and sc.output_transcription.text
+                )
+
+                # Model started a new reply => the caller's utterance just ended.
+                if has_output and not self._model_turn_open:
+                    self._model_turn_open = True
+                    self._snapshot_utterance()
 
                 if sc is not None:
                     if sc.interrupted:                   # caller barged in
                         await self._clear_twilio()
                         self._down_state = None
                         await self._flush_out()
+                        self._model_turn_open = False
                     if sc.output_transcription and sc.output_transcription.text:
                         self._out_buf += sc.output_transcription.text
                     if sc.turn_complete:
                         await self._flush_out()
+                        self._model_turn_open = False
 
                 if response.data:                        # model audio (24k PCM)
                     await self._send_audio(self._gemini_to_twilio(response.data))
@@ -248,9 +274,10 @@ class GeminiBridge:
         if self.ending:
             return
         self.ending = True
-        if self.stt:
-            self.stt.stop()
+        self._snapshot_utterance()                       # last words, if any
         await self._flush_out()
+        if self._transcribe_tasks:                       # let pending transcripts land
+            await asyncio.gather(*self._transcribe_tasks, return_exceptions=True)
         await self.session.emit({"type": "status", "status": "ended"})
         await manager.end(self.session.session_id)
         try:
