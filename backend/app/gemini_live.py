@@ -27,10 +27,10 @@ from .session import CallSession, manager
 _LANG_NAME = {"en": "English", "ml": "Malayalam"}
 _MIN_UTT_BYTES = int(16000 * 2 * 0.4)
 _MAX_UTT_BYTES = 16000 * 2 * 60
-_SPEECH_RMS = 300          # inbound energy above this counts as caller speech
-_SILENCE_NUDGE_SEC = 18    # nudge the model if line is silent this long
+_SPEECH_RMS = 300
+_SILENCE_NUDGE_SEC = 25
 _MAX_NUDGES = 2
-_MAX_CALL_SEC = 600        # hard cap
+_MAX_CALL_SEC = 900
 
 _TRANSCRIBE_PROMPT = (
     "Transcribe EXACTLY what is spoken in this phone-call audio. Use the original "
@@ -43,44 +43,70 @@ _TRANSCRIBE_PROMPT = (
 def _system_prompt(task: str, language: str, caller_name: str) -> str:
     lang = _LANG_NAME.get(language, "English")
     lang_rule = (
-        "Speak natural, everyday spoken Malayalam - the way people talk on the phone in "
-        "Kerala - mixing in common English words where a real speaker would. If the "
-        "other person switches to English, follow them."
+        "Speak natural, everyday spoken Malayalam - the way people talk on the phone "
+        "in Kerala - mixing in common English words where a real speaker would. If "
+        "the other person switches to English, follow them."
         if language == "ml"
         else "Speak natural, relaxed conversational English."
     )
     return (
-        f"You are a warm, friendly assistant on a LIVE PHONE CALL, calling on behalf of "
-        f"{caller_name}. Your single objective: {task}\n\n"
-        f"Primary language: {lang}. {lang_rule}\n"
-        "Conversation rules:\n"
-        "- You placed this call: greet them and briefly say who you're calling for and why.\n"
-        "- Short turns: one or two sentences, one question at a time.\n"
-        "- If they interrupt you, STOP and respond to what they said - never restart "
-        "your sentence. If the thing you didn't finish saying is still important, bring "
-        "it up naturally at the next opportunity; if it's no longer relevant, drop it.\n"
-        "- If you couldn't hear or understand them, politely ask them to repeat - once. "
-        "Never guess critical details. Always confirm names, times, dates and numbers "
-        "by repeating them back once.\n"
-        "- If the wrong person answers, politely ask for the right person, or briefly "
-        "explain the purpose and ask if they can help.\n"
-        "- If you reach VOICEMAIL (a recorded greeting followed by a beep), leave one "
-        "concise message: who you're calling for, the purpose, and that they can expect "
-        "another call. Then call end_call.\n"
-        "- If the line stays silent after you check in twice, say a polite goodbye and "
-        "call end_call.\n"
-        "- Never claim to be human. If asked, say you're an AI assistant calling for "
-        f"{caller_name}.\n"
-        "- When the objective is achieved, impossible, or they want to hang up: one "
-        "short polite closing line, and AFTER speaking it, call end_call."
+        f"You are a personable, attentive assistant on a LIVE PHONE CALL, calling on "
+        f"behalf of {caller_name}. Your objective: {task}\n\n"
+        f"Primary language: {lang}. {lang_rule}\n\n"
+        "TONE - match the context and mirror the other person:\n"
+        "- Personal calls (friends, family, dinner plans): warm and casual, like a "
+        "friendly human assistant who knows them. React naturally to what they say "
+        "('Oh nice!', 'Ah, got it'). Small talk in passing is fine.\n"
+        "- Business calls (restaurants, clinics, offices): polite and professional, "
+        "still human - courteous, clear, never stiff or scripted.\n"
+        "- Mirror their energy: if they are chatty, loosen up; if they are brisk, "
+        "be efficient. Never sound bored, lazy, or like you are reading a checklist.\n\n"
+        "WORKING THE OBJECTIVE - do not rush:\n"
+        "- Mentally break the objective into every piece of information needed or "
+        "action to complete. Keep track of which pieces you have.\n"
+        "- Ask relevant follow-up questions a thoughtful human would ask, one at a "
+        "time. Example: arranging dinner means not just a time, but also where, any "
+        "food preference, and anything they want arranged.\n"
+        "- If an answer is vague, gently pin it down ('Around eight - is eight or "
+        "eight thirty better?'). Always confirm names, times, dates and numbers by "
+        "repeating them back once.\n"
+        "- Stay on the call until every piece is addressed or clearly unobtainable. "
+        "Ending early with the job half-done is a failure.\n\n"
+        "CLOSING PROTOCOL - required before hanging up, in order:\n"
+        "1. Briefly recap what was agreed or learned, in one or two sentences.\n"
+        f"2. Ask if there is anything else, or any message they would like you to "
+        f"pass along to {caller_name} - and if there is, take it down and confirm it.\n"
+        "3. Only after they confirm nothing more: give a warm goodbye, finish "
+        "speaking it fully, then call end_call.\n"
+        "Exception: if THEY clearly want to end (busy, annoyed, said goodbye), "
+        "respect it - skip to a quick recap if possible, thank them, and end.\n\n"
+        "HANDLING THE UNEXPECTED:\n"
+        "- If interrupted, STOP and respond to what they said - never restart your "
+        "sentence. If the unsaid part still matters, weave it in naturally later; if "
+        "not, drop it.\n"
+        "- If you could not hear or understand, politely ask them to repeat - once. "
+        "Never guess critical details.\n"
+        "- Wrong person: politely ask for the right person, or briefly explain the "
+        "purpose and ask if they can help.\n"
+        "- VOICEMAIL (recorded greeting then a beep): leave one concise message - "
+        "who you are calling for, the purpose, that they can expect another call - "
+        "then call end_call.\n"
+        "- Silent line after you check in twice: polite goodbye, then end_call.\n"
+        f"- Never claim to be human. If asked, say you are an AI assistant calling "
+        f"for {caller_name}.\n"
     )
 
 
 _END_CALL_TOOL = {"function_declarations": [{
     "name": "end_call",
-    "description": ("Hang up the phone call. Call this only AFTER you have spoken "
-                    "your closing line, when the task is complete or the conversation "
-                    "is over."),
+    "description": (
+        "Hang up the phone call. STRICT preconditions - ALL must be true: (1) every "
+        "part of the objective is achieved or clearly unobtainable, (2) you recapped "
+        "the outcome to them, (3) you asked if there is anything else or any message "
+        "to pass along and they confirmed there is nothing more, (4) you have fully "
+        "spoken your goodbye. Calling this prematurely abandons the task. Exception: "
+        "the other person clearly wants to end the call, or you just left a "
+        "voicemail message."),
 }]}
 
 
@@ -106,13 +132,10 @@ class GeminiBridge:
         self._utt_buf = bytearray()
         self._model_turn_open = False
         self._transcribe_tasks: set[asyncio.Task] = set()
-        # watchdog + latency state
         self._last_activity = time.monotonic()
         self._last_speech_ts: float | None = None
         self._nudges = 0
-        self._gemini = None
 
-    # ---- audio conversion ----
     def _twilio_to_gemini(self, mulaw: bytes) -> bytes:
         pcm8 = audioop.ulaw2lin(mulaw, 2)
         pcm16, self._up_state = audioop.ratecv(pcm8, 2, 1, 8000, 16000, self._up_state)
@@ -137,7 +160,6 @@ class GeminiBridge:
         except Exception:  # noqa: BLE001
             pass
 
-    # ---- transcripts ----
     async def _flush_out(self) -> None:
         text = self._out_buf.strip()
         self._out_buf = ""
@@ -169,7 +191,6 @@ class GeminiBridge:
         except Exception as exc:  # noqa: BLE001
             print(f"[callee-transcript] failed (non-fatal): {exc}")
 
-    # ---- watchdog ----
     async def _watchdog(self, gemini) -> None:
         while not self.ending:
             await asyncio.sleep(2)
@@ -184,8 +205,8 @@ class GeminiBridge:
                     self._nudges += 1
                     try:
                         await gemini.send_realtime_input(text=(
-                            "(The line has been silent for a while. Politely check if "
-                            "they are still there.)"))
+                            "(The line has been silent for a while. Politely check "
+                            "if they are still there.)"))
                     except Exception:  # noqa: BLE001
                         pass
                 else:
@@ -193,7 +214,6 @@ class GeminiBridge:
                     await self.hang_up("ended")
                     return
 
-    # ---- main ----
     async def run(self) -> None:
         config = {
             "response_modalities": ["AUDIO"],
@@ -208,7 +228,6 @@ class GeminiBridge:
             async with self.client.aio.live.connect(
                 model=self.settings.gemini_live_model, config=config
             ) as gemini:
-                self._gemini = gemini
                 pump = asyncio.create_task(self._gemini_to_phone(gemini))
                 dog = asyncio.create_task(self._watchdog(gemini))
                 try:
@@ -217,7 +236,7 @@ class GeminiBridge:
                     for t in (pump, dog):
                         t.cancel()
                     await asyncio.gather(pump, dog, return_exceptions=True)
-        except Exception as exc:  # noqa: BLE001 - session died mid-call
+        except Exception as exc:  # noqa: BLE001
             print(f"[bridge] gemini session error: {exc}")
             await self.hang_up("dropped")
 
@@ -260,7 +279,6 @@ class GeminiBridge:
             elif event == "stop":
                 self.stream_active = False
                 break
-        # Twilio side ended (callee hung up, or our hangup endpoint)
         await self.hang_up("ended")
 
     async def _gemini_to_phone(self, gemini) -> None:
@@ -315,7 +333,6 @@ class GeminiBridge:
             if not turn_seen:
                 await asyncio.sleep(0.05)
 
-    # ---- teardown ----
     async def hang_up(self, final_status: str = "ended") -> None:
         if self.ending:
             return
@@ -332,7 +349,6 @@ class GeminiBridge:
             await self.ws.close()
         except Exception:  # noqa: BLE001
             pass
-        # persistence + summary: isolated, best-effort, off the call path
         asyncio.create_task(self._finalize(final_status))
 
     async def _finalize(self, final_status: str) -> None:
