@@ -2,16 +2,18 @@
 
 We request native LINEAR16 (a WAV the stdlib `wave` module reads), then
 resample to 8 kHz mu-law locally - exactly what Twilio needs, on the most
-natural voice tier, with no dependence on server-side resampling quirks.
+natural voice tier.
 
-The gRPC client and channel are shared module-wide; `prewarm()` performs a
-throwaway synthesis while the phone is still ringing so the opening line
-doesn't pay the TLS/channel handshake.
+The client is created lazily on first use (NOT at import time), so the .env
+file is loaded and GOOGLE_APPLICATION_CREDENTIALS is exported first. The
+channel is shared module-wide; `prewarm()` performs a throwaway synthesis
+while the phone is still ringing so the opening line skips the handshake.
 """
 from __future__ import annotations
 
 import asyncio
 import io
+import threading
 import wave
 
 # stdlib on <=3.12; the `audioop-lts` package provides the same module
@@ -20,7 +22,20 @@ import audioop
 
 from google.cloud import texttospeech
 
-_client = texttospeech.TextToSpeechClient()
+from .config import get_settings
+
+_client_instance: texttospeech.TextToSpeechClient | None = None
+_client_lock = threading.Lock()
+
+
+def _client() -> texttospeech.TextToSpeechClient:
+    global _client_instance
+    if _client_instance is None:
+        with _client_lock:
+            if _client_instance is None:
+                get_settings()  # loads .env, exports GOOGLE_APPLICATION_CREDENTIALS
+                _client_instance = texttospeech.TextToSpeechClient()
+    return _client_instance
 
 
 def _to_mulaw_8k(wav_bytes: bytes) -> bytes:
@@ -45,7 +60,7 @@ def _to_mulaw_8k(wav_bytes: bytes) -> bytes:
 
 
 def _synthesize_blocking(text: str, language_code: str, voice_name: str) -> bytes:
-    resp = _client.synthesize_speech(
+    resp = _client().synthesize_speech(
         input=texttospeech.SynthesisInput(text=text),
         voice=texttospeech.VoiceSelectionParams(
             language_code=language_code, name=voice_name

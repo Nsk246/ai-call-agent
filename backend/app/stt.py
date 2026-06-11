@@ -5,8 +5,8 @@ battle-tested mic-streaming pattern); results are bridged to the asyncio loop
 with run_coroutine_threadsafe. The worker transparently reconnects around
 Google's ~5-minute streaming limit so long calls don't drop.
 
-A single SpeechClient is shared across calls so each new call skips channel
-setup.
+The SpeechClient is created lazily on first use (NOT at import time), so the
+.env file is loaded and GOOGLE_APPLICATION_CREDENTIALS is exported first.
 """
 from __future__ import annotations
 
@@ -18,7 +18,20 @@ from typing import Awaitable, Callable
 
 from google.cloud import speech
 
-_shared_client = speech.SpeechClient()
+from .config import get_settings
+
+_shared_client: speech.SpeechClient | None = None
+_client_lock = threading.Lock()
+
+
+def _client() -> speech.SpeechClient:
+    global _shared_client
+    if _shared_client is None:
+        with _client_lock:
+            if _shared_client is None:
+                get_settings()  # loads .env, exports GOOGLE_APPLICATION_CREDENTIALS
+                _shared_client = speech.SpeechClient()
+    return _shared_client
 
 
 class StreamingSTT:
@@ -33,7 +46,7 @@ class StreamingSTT:
         model: str = "telephony",
         use_enhanced: bool = True,
     ) -> None:
-        self._client = _shared_client
+        self._client = _client()
         self._language_code = language_code
         self._alt_codes = alternative_language_codes or []
         self._model = model
