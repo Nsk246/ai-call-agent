@@ -207,7 +207,7 @@ export default function App() {
 
       {tab === "console" && (
         <div className="layout">
-          <div>
+          <div className="panel">
             <p className="formhead">COMPOSE TRANSMISSION</p>
             <div className="field">
               <label>ON BEHALF OF</label>
@@ -263,7 +263,7 @@ export default function App() {
             {error && <p className="errline">!! {error}</p>}
           </div>
 
-          <div className="txpane">
+          <div className="txpane panel raised">
             <div className="txhead">
               <div>
                 <p className={`statusword ${stCls}`} style={{ margin: "0 0 4px" }}>
@@ -291,7 +291,18 @@ export default function App() {
                   animate={m.role === "agent" && status === "live"} onTick={scrollFeed} />
               ))}
               {status === "live" && <p className="line"><span className="caret" /></p>}
+              {status === "ended" && !summary && transcript.length > 0 && (
+                <p className="developing">— DEVELOPING RECEIPT —</p>
+              )}
             </div>
+            {!inCall && transcript.length > 0 && (
+              <div className="feedtools">
+                <button className="tool quiet" onClick={() => {
+                  navigator.clipboard?.writeText(transcript.map((t) =>
+                    `${t.role === "agent" ? "AGENT " : "CALLEE"} >> ${t.text}`).join("\n"));
+                }}>COPY</button>
+              </div>
+            )}
             {summary && <><hr className="perf" /><Receipt s={summary} /></>}
           </div>
         </div>
@@ -299,7 +310,7 @@ export default function App() {
 
       {tab === "history" && (
         <div className="hgrid">
-          <div>
+          <div className="panel">
             <p className="formhead">FILED TRANSMISSIONS</p>
             {history.length === 0 && <p className="feedempty">— NONE FILED —</p>}
             {history.map((h, i) => {
@@ -316,7 +327,7 @@ export default function App() {
               );
             })}
           </div>
-          <div>
+          <div className="panel raised">
             {!hSel && <p className="feedempty">— SELECT A TRANSMISSION TO REVIEW —</p>}
             {hSel && (
               <>
@@ -324,7 +335,7 @@ export default function App() {
                   <span className="nm">{hSel.caller_name || hSel.to_number}</span>
                   <span className="mt">{hSel.to_number} · {fmt(hSel.duration_sec || 0)}</span>
                   <div className="toolrow" style={{ marginLeft: "auto" }}>
-                    <button className="tool" onClick={() => exportTranscript(hSel)}>EXPORT</button>
+                    <button className="tool quiet" onClick={() => exportTranscript(hSel)}>EXPORT</button>
                     <button className="tool" onClick={() => callAgain(hSel)}>CALL AGAIN</button>
                   </div>
                 </div>
