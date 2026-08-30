@@ -57,7 +57,7 @@ call duration cap, dropped-session handling with the partial transcript
 preserved and summarized, and Twilio status callbacks so busy, no-answer, and
 failed calls surface in the UI instead of hanging on "dialing".
 
-## Frontend ("Wire")
+## Frontend
 
 A telegram-styled console: paper sheet, typewriter type, Malayalam set in
 Noto Sans Malayalam. Agent lines print character by character with a blinking
